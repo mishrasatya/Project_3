@@ -1,0 +1,694 @@
+---
+title: "Project_Lending_Club"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Business Understanding**
+
+Lending club specialises in lending various types of loans to urban customers.When the company receives a loan application, the company has to make a decision for loan approval based on the applicant's profile. Two types of risks are associated with the bank's decision:
+
+* If the applicant is likely to repay the loan, then not approving the loan results is a loss of business to the company.
+* If the applicant is not likely to repay the loan, i.e. he/she is likely to default, then approving the loan may lead to a financial loss for the company.
+
+The data we are going to analysis has information about past loan applicants and whether they 'defaulted' or not. The aim is to identify patterns which indicate if a person is likely to default, which may be used for taking actions such as denying the loan, reducing the amount of loan, lending (to risky applicants) at a higher interest rate, etc.
+
+When a person applies for a loan, there are two types of decisions that could be taken by the company:
+
+1.Loan accepted: If the company approves the loan, there are 3 possible scenarios described below:
+
+* Fully paid: Applicant has fully paid the loan (the principal and the interest rate)
+* Current: Applicant is in the process of paying the instalments, i.e. the tenure of the loan is not yet completed. These candidates are not labelled as 'defaulted'.
+* Charged-off: Applicant has not paid the instalments in due time for a long period of time, i.e. he/she has defaulted on the loan.
+
+2.Loan rejected: The company had rejected the loan (because the candidate does not meet their requirements etc.). Since the loan was rejected, there is no transactional history of those applicants with the company and so this data is not available with the company (and thus in this dataset)
+
+The company wants to understand the driving factors (or driver variables) behind loan default, i.e. the variables which are strong indicators of default.  The company can utilise this knowledge for its portfolio and risk assessment.
+
+Setting up the working directory and loading car price file to R console
+
+```{r}
+loan_raw <- read.csv("loan.csv",header = TRUE, sep = ",", stringsAsFactors = FALSE)
+```
+
+Loading the required libraries
+
+```{r warning=FALSE , message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(data.table)
+library(stringr)
+library(corrplot)
+```
+
+Examining the structure of the dataset. There are 39717 rows and 111 variables
+
+```{r}
+str(loan_raw)
+```
+
+We see that there are lot of variable that only have data as NA. We will have to remove them, before removing we will check how many of the variables have everyting as NA.
+
+```{r}
+sapply(loan_raw, function(x) sum(is.na(x)))
+```
+
+**Data Cleaning (Part 1)**
+
+There are 49 variable that have NA's for all the rows and 8 more variables that we do not need, hence we will remove them.
+
+```{r}
+loan_raw <- loan_raw[,-c(51,54:78,80:105,107:111)]
+```
+
+Data Cleaning (Part 1)
+
+We will now process column F. First we will trim the leading white spaces in Column F. Then we will mutate the column to remove months from each row, so as to make it a calculation field. After doing this we will Convert column F to numeric.
+
+```{r}
+loan_raw$term <- str_trim(loan_raw$term)
+loan_raw <- mutate(loan_raw,term = sapply(strsplit(loan_raw$term, split=' ', fixed=TRUE),function(x) (x[1])))
+loan_raw$term <- as.numeric(loan_raw$term)
+```
+
+We will now process column L.We will replace < 1 year to "Below 1 Year" for better readability.
+
+```{r}
+loan_raw$emp_length <- str_replace_all(loan_raw$emp_length,c("< 1 year" = "Below 1 Year"))
+```
+
+We will now process column G & AH. We will stripe the % sign from columns Columns 'int_rate' and 'revol_util'.
+
+```{r}
+loan_raw$int_rate <- as.numeric(gsub("%","",as.character(loan_raw$int_rate)))
+loan_raw$revol_util <- as.numeric(gsub("%","",as.character(loan_raw$revol_util)))
+```
+
+End of data cleaning (Part 1)
+
+Now let us do some basic understanding of the data by asking simple questions like:
+
+1. What is the purpose for which people usually take loans?
+
+```{r}
+summary(factor(loan_raw$purpose))
+```
+
+We see that most number of people take loans to consolidate the debts followed by credit card payments.
+
+2. What is the total amount of loan distributed to each grade of customer?
+
+```{r}
+aggregate(funded_amnt ~ grade, loan_raw, sum)
+```
+
+We see that most amount of fund has gone to Grade B customers followed by Grade C & A customers. 
+
+3. What is the total loan amount attached to each repayment period?
+
+```{r}
+aggregate(funded_amnt ~ term, loan_raw, sum)
+```
+
+We see that people mostly take the 36 months option for repaying their loans.
+
+4. What is the total amount of loan in each loan status?
+
+```{r}
+aggregate(funded_amnt ~ loan_status, loan_raw, sum)
+```
+
+We see that around $6.61 billion worth of loan amount is charged off
+
+5. What is the total amount of loan charged off for each grade of customer?
+
+```{r}
+charge_off_subset <- subset(loan_raw, loan_status == "Charged Off")
+aggregate(funded_amnt ~ grade, charge_off_subset, sum)
+```
+
+We see that most amount of fund that was charged off was for Grade B customers followed by Grade C customers.
+
+Now we have a basic understanding of how this data looks like. We can broadly divide the variable present in the dataset into three different types.
+
+* Variables that are related to customer demographics.
+* Variables that are related to loan characteristics.
+* Variables related to customer behaviour.
+
+**The variable that will go as customer demographic variables are**
+
+* emp_title
+* emp_length
+* home_ownership
+* annual_inc
+* Verification_status
+* addr_state
+* zip_code
+* title
+* purpose
+* desc
+* url
+
+**The variable that will go as loan characteristics variables are**
+
+* loan_amnt
+* funded_amnt
+* funded_amnt_inv
+* int_rate
+* loan_status
+* grade
+* sub_grade
+* dti (debt to income ratio)
+* issue_d (the date on which the loan was issued)
+* term
+* installment
+
+**The variable that will go as customer behaviour variables are**
+
+* delinq_2yrs
+* earliest_cr_line
+* inq_last_6mths
+* open_acc
+* pub_rec
+* revol_bal
+* revol_util
+* total_acc
+* out_prncp
+* out_prncp_inv
+* total_pymnt
+* total_pymnt_inv
+* total_rec_prncp
+* total_rec_int
+* total_rec_late_fee
+* recoveries
+* collection_recovery_fee
+* last_pymnt_d
+* last_pymnt_amnt
+* next_pymnt_d
+* last_credit_pull_d
+* application_type
+
+The reason why we segregated the variable into three bucket is because we want to do exploratory analysis which will be more concerned with customer demographics and loan characteristics. Hence we will remove all the variable that fall under customer behaviour.
+
+```{r}
+customer_behaviour_var <- c("delinq_2yrs","earliest_cr_line","inq_last_6mths","open_acc","pub_rec","revol_bal","revol_util","total_acc","out_prncp","out_prncp_inv","total_pymnt","total_pymnt_inv","total_rec_prncp","total_rec_int","total_rec_late_fee","recoveries","collection_recovery_fee","last_pymnt_d","last_pymnt_amnt","next_pymnt_d","last_credit_pull_d","application_type")
+
+loan_raw <- loan_raw[,!colnames(loan_raw) %in% customer_behaviour_var]
+```
+
+In the begining the dataset had 111 variables, we reduced this to 54 variables. So basically we removed the variables that had NA's for all the entries. Further we went on and segregated the variables into three buckets, namely customer demographic, loan characteristics and customer behaviour. As we are doing exploratory data analysis we removed all the variables that is related to customer behaviour as behaviour is related to attitude of the customer and we are trying to identify patterns which indicate if a person is likely to default.
+
+
+Now we are left with 32 variables, we will see how we can further reduce the varaibles.
+
+Variables id and member_id are not required we will remove them.
+Variables mths_since_last_delinq, mths_since_last_record will be removed as they have a lot of NA's.
+
+
+```{r}
+sapply(loan_raw, function(x) sum(is.na(x)))
+```
+
+Removing Variables that are not required.
+
+```{r}
+remove_var_round1 <- c("id","member_id","mths_since_last_delinq","mths_since_last_record")
+loan_raw <- loan_raw[,!colnames(loan_raw) %in% remove_var_round1]
+```
+
+Now we will look at some more variables namely pymnt_plan, initial_list_status, collections_12_mths_ex_med, policy_code, chargeoff_within_12_mths, pub_rec_bankruptcies.
+
+```{r}
+str(loan_raw$pymnt_plan)
+str(loan_raw$initial_list_status)
+str(loan_raw$collections_12_mths_ex_med)
+str(loan_raw$policy_code)
+str(loan_raw$chargeoff_within_12_mths)
+str(loan_raw$pub_rec_bankruptcies)
+```
+
+We see that the information these variables have is singular in nature, hence we will not include them in our list of variables. So now we will remove them.
+
+```{r}
+remove_var_round2 <- c("pymnt_plan","initial_list_status","collections_12_mths_ex_med","policy_code","chargeoff_within_12_mths","pub_rec_bankruptcies")
+loan_raw <- loan_raw[,!colnames(loan_raw) %in% remove_var_round2]
+```
+
+Now we are done with the variable selection part. In total we have 22 variables with us for analysis.
+Let us do a second round of data cleaning on the existing variables.
+
+**Data Cleaning (Part 2)**
+
+We see that employee title is a categorical variable and has a lot of blanks in it, hence we will remove that from our calculations.
+
+```{r}
+loan_raw$emp_title <- NULL
+```
+
+We see that employee length is currently character type, we will only extract the numeric part from it and convert it to numeric type.
+
+```{r}
+str(loan_raw$emp_length)
+```
+```{r warning=FALSE, message=FALSE}
+loan_raw$emp_length <- extract_numeric(loan_raw$emp_length)
+```
+
+We see that issue date is currently character type, we will have to convert it to date type.
+
+```{r}
+str(loan_raw$issue_d)
+loan_raw$issue_d <- paste("01-", loan_raw$issue_d, sep = "")
+loan_raw$issue_d <- as.Date(loan_raw$issue_d, "%d-%B-%y")
+```
+
+We see that url is a categorical variable, hence we will remove that from our calculations. Mostly we are not taking any categorical variables for the current exercise.
+
+```{r}
+head(loan_raw$url)
+loan_raw$url <- NULL
+```
+
+We see that desc, title and addr_state are categorical variables, hence we will remove them from our calculations. Also Zip_code variable has insufficient information, hence we will remove that too. 
+
+```{r}
+head(loan_raw$desc)
+head(loan_raw$addr_state)
+head(loan_raw$zip_code)
+head(loan_raw$title)
+loan_raw$desc <- NULL
+loan_raw$addr_state <- NULL
+loan_raw$zip_code <- NULL
+loan_raw$title <- NULL
+```
+
+So we are done with the variable removal part. We will now go ahead and make all the remaining character variables to factor type. This is done for ease of calculation.
+
+```{r}
+loan_raw[sapply(loan_raw, is.character)] <- lapply(loan_raw[sapply(loan_raw, is.character)], as.factor)
+```
+
+**Understanding The Variables**
+
+For us the loan status is the dependent variable. As in future we will come to know if a loan that was given was paid off or charged off. For this reason we will remove the loans that are in current status as they are on going loans and do not have a conculsion attached to them.
+
+Considering fully paid and charged off only as the loan status and creating a new dataframe.
+
+```{r}
+current_loan <- filter(loan_raw,loan_status %in% c("Current"))
+current_loan$loan_status <- factor(current_loan$loan_status)
+loan_fullypaid_chargedoff <- filter(loan_raw,loan_status %in% c("Fully Paid","Charged Off"))
+loan_fullypaid_chargedoff$loan_status <- factor(loan_fullypaid_chargedoff$loan_status)
+summary(loan_fullypaid_chargedoff$loan_status)
+```
+
+Now lets check what is the percentage of loans that fall under the charged off bucket. It seems that 14.6% of loans fall under the charged off bucket. This is what we will have to reduce. 
+
+```{r}
+table(loan_fullypaid_chargedoff$loan_status)[1]/nrow(loan_fullypaid_chargedoff)*100
+```
+
+Now lets change the levels of charged off and fully paid to numeric. This will ease the calculation. We will make charged off as 1 and fully paid as 0.
+
+```{r}
+loan_fullypaid_chargedoff$loan_status <- ifelse(loan_fullypaid_chargedoff$loan_status=="Charged Off",1,0)
+```
+
+
+**Segmented Analysis**
+
+Now let us start with segmented analysis.
+
+**A. Variable - PURPOSE**
+
+We will first look at the purpose for which people take loans, as that is the most basic thing. For this we will group purpose with different grades of customer and check what is the amount that was dispursed across fully paid and charged off.
+
+We will also simply group by purpose and check what is the amount dispursed.
+
+```{r}
+summary_purposewise <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, loan_status, purpose, grade),sum(funded_amnt)))
+colnames(summary_purposewise)[colnames(summary_purposewise)=="sum(funded_amnt)"] <- "Amount"
+summary_purposewise$Amount <- summary_purposewise$Amount/1000000
+```
+
+```{r}
+summary_purpose <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, purpose),sum(funded_amnt)))
+summary_purpose
+```
+
+We see that most of the people have taken loans to consolidate their debts followed by repayment of credit card bills.
+
+Before creating plots and checking the relationships between different variables, we will create few aesthetics that will be used in the plotting process.
+
+As there are more than 7 grades we will create shapes manually through a variable called change_shape. We will create a variable background_fill for better visibility and legend_position to show the legends in the bottom.    
+
+```{r}
+change_shape <- scale_shape_manual(values = c(24, 15, 16, 17, 3, 8, 4))
+background_fill <- theme(panel.background = element_rect(fill = 'black'))
+legend_position <- theme(legend.position = "bottom")
+```
+
+Now let us plot and check how the purposewise summary look like.
+
+```{r warning=FALSE, message=FALSE, fig.width= 8}
+summary_purposewise_plot <- ggplot(summary_purposewise, aes(x = Amount, y = factor(purpose), col = loan_status, shape = grade))
+add_labels_1 <- labs(title = "Summary of Purpose & Loan Status on Grade (AMOUNTWISE)", x = "Funded Amount in millions", y = "Purpose")
+summary_purposewise_plot_final <- summary_purposewise_plot + geom_point(alpha = 0.7,position = position_jitter(width = 0.35)) + change_shape + add_labels_1 + legend_position + background_fill
+summary_purposewise_plot_final
+```
+
+Looking at the above graph we can see that debt consolidation fetches the highest amount of loan and these loan goes mostly to grade B & C customers.
+
+The top three category for which loans are taken are Debt Consolidation, Credit Card payments and Home Improvement.
+
+**B. Variable - TERM**
+
+Lets look at the term for which people take loans. For this we will group term with different grades of customer and check what is the amount that was dispursed across fully paid and charged off.
+
+We will also simply group by term and check what is the amount dispursed.
+
+```{r}
+summary_termwise <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, loan_status, term, grade),sum(funded_amnt)))
+colnames(summary_termwise)[colnames(summary_termwise)=="sum(funded_amnt)"] <- "Amount"
+summary_termwise$Amount <- summary_termwise$Amount/1000000
+```
+
+```{r}
+summary_term <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, term),sum(funded_amnt)))
+summary_term
+```
+
+We see that most of the people have taken loans for 36 months period.
+
+Now let us plot and check how the termwise summary look like.
+
+```{r warning=FALSE, message=FALSE, fig.width= 8}
+summary_termwise_plot <- ggplot(summary_termwise, aes(x = factor(term), y = Amount, col = loan_status, shape = grade))
+add_labels_2 <- labs(title = "Summary of Term & Loan Status on Grade (AMOUNTWISE)", x = "Term", y = "Funded Amount in millions")
+summary_termwise_plot_final <- summary_termwise_plot + geom_point(alpha = 0.7,position = position_jitter(width = 0.4)) + change_shape + add_labels_2 + legend_position + background_fill
+summary_termwise_plot_final
+```
+
+Again its the grade B customers that stands out, followed by grade A and C for loans taken for the period of 36 months.
+
+
+**C. Variable - HOME OWNERSHIP**
+
+Lets look at the home ownership for which people take loans. For this we will group home owners with different grades of customer and check what is the amount that was dispursed across fully paid and charged off.
+
+We will also simply group by home ownership and check what is the amount dispursed.
+
+```{r}
+summary_homewise <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, loan_status, home_ownership, grade),sum(funded_amnt)))
+colnames(summary_homewise)[colnames(summary_homewise)=="sum(funded_amnt)"] <- "Amount"
+summary_homewise$Amount <- summary_homewise$Amount/1000000
+```
+
+```{r}
+summary_home <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, home_ownership),sum(funded_amnt)))
+summary_home
+```
+
+We see that most of the people have home ownership on mortgage.
+
+Now let us plot and check how the homewise summary look like.
+
+```{r warning=FALSE, message=FALSE, fig.width= 8}
+summary_homewise_plot <- ggplot(summary_homewise, aes(x = factor(home_ownership), y = Amount, col = loan_status, shape = grade))
+add_labels_2 <- labs(title = "Summary of Home & Loan Status on Grade (AMOUNTWISE)", x = "Home Ownership", y = "Funded Amount in millions")
+summary_homewise_plot_final <- summary_homewise_plot + geom_point(alpha = 0.7,position = position_jitter(width = 0.4)) + change_shape + add_labels_2 + legend_position + background_fill
+summary_homewise_plot_final
+```
+
+Again its the grade B customers that stands out, followed by grade A and C for loans taken for home ownership that are of type mortgage and rented.
+
+
+**D. Variable - EMPLOYMENT LENGTH**
+
+Lets look at the employment length and loans amount taken. For this we will group employement lenght with different grades of customer and check what is the amount that was dispursed across fully paid and charged off.
+
+We will also simply group by employment lenght and check what is the amount dispursed.
+
+```{r}
+summary_emplenwise <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, loan_status, emp_length, grade),sum(funded_amnt)))
+colnames(summary_emplenwise)[colnames(summary_emplenwise)=="sum(funded_amnt)"] <- "Amount"
+summary_emplenwise$Amount <- summary_emplenwise$Amount/1000000
+```
+
+```{r}
+summary_emplen <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, emp_length),sum(funded_amnt)))
+summary_emplen
+```
+
+We see that for employement lenght of 10 years, people have received the biggest chunk of the total loan amount.
+
+Now let us plot and check how the emplenwise summary look like.
+
+```{r warning=FALSE, message=FALSE, fig.width= 8}
+summary_emplenwise_plot <- ggplot(summary_emplenwise, aes(x = factor(emp_length), y = Amount, col = loan_status, shape = grade))
+add_labels_2 <- labs(title = "Summary of Emp Len & Loan Status on Grade (AMOUNTWISE)", x = "Employ Length", y = "Funded Amount in millions")
+summary_emplenwise_plot_final <- summary_emplenwise_plot + geom_point(alpha = 0.7,position = position_jitter(width = 0.4)) + change_shape + add_labels_2 + legend_position + background_fill
+summary_emplenwise_plot_final
+```
+
+Again its the grade B customers that stands out, followed by grade A and C for loans taken by people having employment lenght of 10 years. Across all the employement lenght Grade B customers are dispursed with highest loan amount.
+
+
+**E. Variable - VERIFICATION_STATUS**
+
+Lets look at the verification status and loans amount taken. For this we will group verification status with different grades of customer and check what is the amount that was dispursed across fully paid and charged off.
+
+We will also simply group by verification status and check what is the amount dispursed.
+
+```{r}
+summary_verstawise <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, loan_status, verification_status, grade),sum(funded_amnt)))
+colnames(summary_verstawise)[colnames(summary_verstawise)=="sum(funded_amnt)"] <- "Amount"
+summary_verstawise$Amount <- summary_verstawise$Amount/1000000
+```
+
+```{r}
+summary_versta <- as.data.frame(summarise(group_by(loan_fullypaid_chargedoff, verification_status),sum(funded_amnt)))
+summary_versta
+```
+
+We see that verified status has received the biggest chunk of the total loan amount, followed by Not Verified.
+
+Now let us plot and check how the verstawise summary look like.
+
+```{r warning=FALSE, message=FALSE, fig.width= 8}
+summary_verstawise_plot <- ggplot(summary_verstawise, aes(x = factor(verification_status), y = Amount, col = loan_status, shape = grade))
+add_labels_2 <- labs(title = "Summary of Ver Status & Loan Status on Grade (AMOUNTWISE)", x = "Verification Status", y = "Funded Amount in millions")
+summary_verstawise_plot_final <- summary_verstawise_plot + geom_point(alpha = 0.7,position = position_jitter(width = 0.4)) + change_shape + add_labels_2 + legend_position + background_fill
+summary_verstawise_plot_final
+```
+
+Again its the grade B customers that stands out, followed by grade A and C for loans taken by people having verified status. Across all the verification status Grade B customers are dispursed with highest loan amount.
+
+
+We did a overall surface analysis to see what are the factors that could be involved in default rate. We found that Grade B customers are the one's that are given the highest amount of the loan chunk. Does this mean that Grade B are the customers that default the most? We need to dig deep to understand what are the criteria's that causes default, some of which are listed below.
+
+1.What are the purpose that contribute the most to loan amount disbursement?
+Once we have this segments we can narrow down our focus to these purposes.
+
+2.We know that 14.58% of the loan status contribute to chargeoff. This is the default rate.
+Which are the purpose after narrow down that contribute to this default rate the most?
+
+3.Once we have the output from question 2 we will have to find out the most important purpose
+What are the purpose's that are most important while considering default rate?
+
+Answers to these three questions will give us the purpose/s that we need to focus to decrease default rate.
+Lets now look at how we can find the purpose/s contributing the most to default rate.
+
+
+**Question - 1**
+
+
+```{r}
+purpose_percent <- mutate(summary_purpose, amount_pct = `sum(funded_amnt)`/ sum(`sum(funded_amnt)`)*100)
+purpose_percent
+```
+
+We see that Debt Consolidation is at 53%, Credit Card is at 13.6%, Home Improvement is at 7.5% and Small Business is at 5.4%. So these four are the top contributors to loan disbursement.
+
+
+**Question - 2**
+
+
+```{r}
+only_chargedoff <- filter(loan_fullypaid_chargedoff,loan_status %in% c("1"))
+only_chargedoff_purpose <- as.data.frame(summarise(group_by(only_chargedoff, purpose),sum(funded_amnt)))
+only_chargedoff_percent <- mutate(only_chargedoff_purpose, amount_pct = `sum(funded_amnt)`/ sum(`sum(funded_amnt)`)*100)
+only_chargedoff_percent
+```
+
+So when we see the charged off part, we see that again Debt consolidation leads with almost 55%, followed by Credit card at 10.3% which is closely followed by Small Business at 10.1% and lastly Home Improvement at 6.1%
+
+
+**Question - 3**
+
+
+Looking at the amount disbursed for loans that were charged off, we see that around 71% of it goes to Debt Consolidation, Credit Card & Home Improvement. We choose Home Improvement over Small Business because on a whole when it comes to amountwise, home improvement is given more loan amount then small business. So these three would be our major focus area and this is what we will try to reduce. If we are able to reduce these by even a little we can have a larger reduction in credit loss.
+
+Creating a dataframe with debt consolidation, credit card and home improvement as the purpose.
+
+```{r}
+loan_fullypaid_chargedoff$purpose <- as.character(loan_fullypaid_chargedoff$purpose)
+loan_final <- filter(loan_fullypaid_chargedoff, purpose == "debt_consolidation" | purpose == "credit_card" | purpose == "home_improvement")
+loan_final$purpose <- factor(loan_final$purpose)
+summary(loan_final$purpose)
+```
+
+
+We will now create three new dataframe from loan_final dataframe, one each for debt, credit card and home improvement. After creating these we will do univariate analysis on the newly created dataframes and see what is the impact of each variable on default.
+
+```{r}
+loan_debt <- filter(loan_final, loan_final$purpose == "debt_consolidation" & loan_final$loan_status == "1")
+loan_credit <- filter(loan_final, loan_final$purpose == "credit_card" & loan_final$loan_status == "1")
+loan_home <- filter(loan_final, loan_final$purpose == "home_improvement" & loan_final$loan_status == "1")
+```
+
+
+**DEBT CONSOLIDATION**
+
+
+```{r}
+loan_debt_emplen <- as.data.frame(summarise(group_by(loan_debt, emp_length),sum(funded_amnt)))
+loan_debt_emplen
+```
+
+Largest chunk of loan disbursed to 10 years of experience followed by 1 year experience
+
+```{r}
+loan_debt_term <- as.data.frame(summarise(group_by(loan_debt, term),sum(funded_amnt)))
+loan_debt_term
+```
+
+Loans that were taken for 60 months have more defaults
+
+```{r}
+loan_debt_home <- as.data.frame(summarise(group_by(loan_debt, home_ownership),sum(funded_amnt)))
+loan_debt_home
+```
+
+People how have taken mortgage have defaulted the most.
+
+```{r}
+loan_debt_versta <- as.data.frame(summarise(group_by(loan_debt, verification_status),sum(funded_amnt)))
+loan_debt_versta
+```
+
+People with verified status have defaulted the most.
+
+```{r}
+loan_debt_grade <- as.data.frame(summarise(group_by(loan_debt, grade),sum(funded_amnt)))
+loan_debt_grade
+```
+
+People that fall in Grade C and D default the most.
+
+**CREDIT CARDS**
+
+```{r}
+loan_credit_emplen <- as.data.frame(summarise(group_by(loan_credit, emp_length),sum(funded_amnt)))
+loan_credit_emplen
+```
+
+Largest chunk of loan disbursed to 10 years of experience followed by 1 year experience
+
+```{r}
+loan_credit_term <- as.data.frame(summarise(group_by(loan_credit, term),sum(funded_amnt)))
+loan_credit_term
+```
+
+Loans that were taken for 60 months have more defaults
+
+```{r}
+loan_credit_home <- as.data.frame(summarise(group_by(loan_credit, home_ownership),sum(funded_amnt)))
+loan_credit_home
+```
+
+People how have taken mortgage have defaulted the most.
+
+```{r}
+loan_credit_versta <- as.data.frame(summarise(group_by(loan_credit, verification_status),sum(funded_amnt)))
+loan_credit_versta
+```
+
+People with verified status have defaulted the most.
+
+```{r}
+loan_credit_grade <- as.data.frame(summarise(group_by(loan_credit, grade),sum(funded_amnt)))
+loan_credit_grade
+```
+
+People that fall in Grade B and C default the most.
+
+**HOME IMPROVEMENT**
+
+```{r}
+loan_home_emplen <- as.data.frame(summarise(group_by(loan_home, emp_length),sum(funded_amnt)))
+loan_home_emplen
+```
+
+Largest chunk of loan disbursed to 10 years of experience followed by 1 year experience
+
+```{r}
+loan_home_term <- as.data.frame(summarise(group_by(loan_home, term),sum(funded_amnt)))
+loan_home_term
+```
+
+Loans that were taken for 60 months have more defaults
+
+```{r}
+loan_home_home <- as.data.frame(summarise(group_by(loan_home, home_ownership),sum(funded_amnt)))
+loan_home_home
+```
+
+People how have taken mortgage have defaulted the most.
+
+```{r}
+loan_home_versta <- as.data.frame(summarise(group_by(loan_home, verification_status),sum(funded_amnt)))
+loan_home_versta
+```
+
+People with verified status have defaulted the most.
+
+```{r}
+loan_home_grade <- as.data.frame(summarise(group_by(loan_home, grade),sum(funded_amnt)))
+loan_home_grade
+```
+
+People that fall in Grade B and C default the most.
+
+**FINDINGS**
+
+1. Major amount of loan are disbursed for Debt Consolidation, Credit Card & Home Improvement
+2. Most amount defaulted is also for Debt Consolidation, Credit Card & Home Improvement
+3. Customer that has more than 10 years of experience and 1 year of experience have defaulted the most.
+4. Customer with verified status default more than any other status.
+5. Customers that have their home in mortgage default the most.
+6. Customers that fall in grade C default the most
+7. Customers who have taken loan for 60 months default the most.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
